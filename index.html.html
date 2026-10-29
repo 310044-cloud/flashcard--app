@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>極簡離線單字閃卡 PWA</title>
+  
+  <!-- PWA 主題顏色與 Manifest 配置 -->
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  
+  <!-- Dynamic PWA Manifest -->
+  <link id="manifest-placeholder" rel="manifest">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- FontAwesome 圖標 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- Tesseract.js (前端離線 OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <style>
+    /* 3D 翻牌動畫效果 */
+    .perspective-1000 {
+      perspective: 1000px;
+    }
+    .transform-style-3d {
+      transform-style: preserve-3d;
+      transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1);
+    }
+    .rotate-y-180 {
+      transform: rotateY(180deg);
+    }
+    .backface-hidden {
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+    }
+    /* 隱藏滾動條 */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen flex flex-col justify-between selection:bg-indigo-500 selection:text-white">
+
+  <!-- 頂部導覽列 -->
+  <header class="bg-indigo-600 text-white shadow-md sticky top-0 z-30">
+    <div class="max-w-md mx-auto px-4 py-3 flex justify-between items-center">
+      <div class="flex items-center space-x-2">
+        <i class="fa-solid font-bold text-xl fa-layer-group"></i>
+        <h1 class="font-bold text-lg tracking-wide">智記 Flashcards</h1>
+      </div>
+      <div class="flex items-center space-x-2">
+        <button id="pwa-install-btn" onclick="installPWA()" class="hidden bg-amber-400 hover:bg-amber-500 text-indigo-950 font-bold px-2.5 py-1 rounded-full text-xs shadow transition flex items-center gap-1">
+          <i class="fa-solid fa-download"></i> 安裝 App
+        </button>
+        <button onclick="openModal('qr-modal')" class="p-2 rounded-full hover:bg-indigo-700 transition" title="生成 QR Code">
+          <i class="fa-solid fa-qrcode text-lg"></i>
+        </button>
+        <button onclick="switchTab('manage-tab')" class="p-2 rounded-full hover:bg-indigo-700 transition" title="單字清單">
+          <i class="fa-solid fa-list-check text-lg"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主內容分頁容器 -->
+  <main class="flex-grow max-w-md w-full mx-auto p-4 flex flex-col justify-between">
+    
+    <!-- 分頁 1: 複習閃卡頁面 -->
+    <section id="review-tab" class="flex-grow flex flex-col justify-between">
+      <!-- 統計數據與進度條 -->
+      <div class="mb-4 bg-white p-3 rounded-2xl shadow-sm border border-slate-200">
+        <div class="flex justify-between items-center text-xs font-semibold text-slate-500 mb-1">
+          <span>今日待複習：<strong id="due-count" class="text-indigo-600 text-sm">0</strong> 張</span>
+          <span>卡片總數：<strong id="total-count" class="text-slate-700">0</strong></span>
+        </div>
+        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+          <div id="progress-bar" class="bg-indigo-600 h-full w-0 transition-all duration-300"></div>
+        </div>
+      </div>
+
+      <!-- 閃卡主要容器 (3D 卡片) -->
+      <div id="card-container" class="flex-grow flex items-center justify-center my-auto perspective-1000 py-4 min-h-[320px]">
+        <div id="flashcard" onclick="flipCard()" class="transform-style-3d relative w-full h-80 bg-white rounded-3xl shadow-xl border border-slate-100 cursor-pointer flex flex-col justify-between p-6 select-none">
+          
+          <!-- 卡片正面 (英文) -->
+          <div class="backface-hidden absolute inset-0 p-6 flex flex-col justify-between rounded-3xl bg-white">
+            <div class="flex justify-between items-center">
+              <span class="text-xs font-bold tracking-wider text-indigo-500 uppercase bg-indigo-50 px-2.5 py-1 rounded-full">English</span>
+              <span id="card-level-front" class="text-xs text-slate-400 font-medium">--</span>
+            </div>
+            <div class="text-center my-auto">
+              <h2 id="card-word" class="text-3xl font-extrabold text-slate-800 break-words">點擊下方「+」新增單字</h2>
+              <p id="card-phonetic" class="text-sm text-slate-400 mt-2 font-mono"></p>
+            </div>
+            <div class="text-center text-xs text-slate-400 flex items-center justify-center gap-1">
+              <i class="fa-solid fa-rotate"></i> 點擊卡片翻面看中文
+            </div>
+          </div>
+
+          <!-- 卡片背面 (中文) -->
+          <div class="backface-hidden rotate-y-180 absolute inset-0 p-6 flex flex-col justify-between rounded-3xl bg-indigo-600 text-white">
+            <div class="flex justify-between items-center">
+              <span class="text-xs font-bold tracking-wider text-indigo-200 uppercase bg-indigo-700/50 px-2.5 py-1 rounded-full">中文翻譯</span>
+              <span id="card-pos-back" class="text-xs text-indigo-200 font-medium"></span>
+            </div>
+            <div class="text-center my-auto">
+              <h3 id="card-translation" class="text-2xl font-bold break-words">--</h3>
+              <p id="card-note" class="text-xs text-indigo-100 mt-3 opacity-90 italic"></p>
+            </div>
+            <div class="text-center text-xs text-indigo-200 flex items-center justify-center gap-1">
+              <i class="fa-solid fa-rotate"></i> 再次點擊翻回英文
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 底部評估與操作按鈕 -->
+      <div class="mt-4 space-y-3">
+        <div id="review-controls" class="grid grid-cols-2 gap-3 opacity-50 pointer-events-none transition-all">
+          <button onclick="reviewCard(false)" class="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-bold py-3.5 px-4 rounded-2xl shadow-sm transition active:scale-95 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-xmark text-lg"></i> 忘記了 (重來)
+          </button>
+          <button onclick="reviewCard(true)" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border border-emerald-200 font-bold py-3.5 px-4 rounded-2xl shadow-sm transition active:scale-95 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-check text-lg"></i> 記住了 (延後)
+          </button>
+        </div>
+
+        <!-- 快速功能按鈕列 -->
+        <div class="flex gap-2">
+          <button onclick="openAddModal('camera')" class="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold py-2.5 rounded-xl border border-indigo-200 text-xs flex items-center justify-center gap-1.5 transition">
+            <i class="fa-solid fa-camera"></i> 拍照 / OCR 辨識
+          </button>
+          <button onclick="openAddModal('manual')" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition">
+            <i class="fa-solid fa-plus"></i> 手動新增單字
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 分頁 2: 單字管理清單 (預設隱藏) -->
+    <section id="manage-tab" class="hidden flex-grow flex flex-col">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="font-bold text-slate-700 text-base">單字庫管理</h2>
+        <button onclick="switchTab('review-tab')" class="text-xs bg-slate-200 hover:bg-slate-300 px-3 py-1.5 rounded-lg text-slate-700 font-semibold">
+          <i class="fa-solid fa-arrow-left"></i> 返回複習
+        </button>
+      </div>
+
+      <div class="relative mb-3">
+        <i class="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-sm"></i>
+        <input type="text" id="search-input" oninput="renderManageList()" placeholder="搜尋單字或中文..." class="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+      </div>
+
+      <div id="word-list" class="flex-grow overflow-y-auto max-h-[calc(100vh-220px)] space-y-2 pr-1 no-scrollbar">
+        <!-- 單字清單動態生成 -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal 1: 新增 / 編輯單字對話框 (含 OCR) -->
+  <div id="add-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl w-full max-w-sm p-5 shadow-2xl space-y-4 relative animate-fade-in">
+      <div class="flex justify-between items-center border-b pb-2">
+        <h3 id="modal-title" class="font-bold text-slate-800 text-base">新增閃卡單字</h3>
+        <button onclick="closeModal('add-modal')" class="text-slate-400 hover:text-slate-600 p-1">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <!-- OCR 圖片上傳區塊 -->
+      <div id="ocr-section" class="bg-indigo-50/60 border-2 border-dashed border-indigo-200 rounded-2xl p-3 text-center">
+        <input type="file" id="ocr-file-input" accept="image/*" capture="environment" class="hidden" onchange="handleOCRImage(this)">
+        <button onclick="document.getElementById('ocr-file-input').click()" class="w-full py-2 bg-white hover:bg-indigo-50 text-indigo-600 font-bold rounded-xl text-xs border border-indigo-200 shadow-sm transition flex items-center justify-center gap-1.5">
+          <i class="fa-solid fa-camera"></i> 選擇圖片 / 拍攝單字相片
+        </button>
+        <p id="ocr-status" class="text-[11px] text-indigo-400 mt-1.5">支援前端離線 OCR 辨識英文單字</p>
+      </div>
+
+      <!-- 輸入表單 -->
+      <form id="card-form" onsubmit="saveCardForm(event)" class="space-y-3">
+        <input type="hidden" id="edit-card-id">
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 mb-1">英文單字 / 詞組 *</label>
+          <input type="text" id="input-word" required placeholder="e.g. Algorithm" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 mb-1">中文翻譯 *</label>
+          <input type="text" id="input-translation" required placeholder="e.g. 演算法" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1">詞性 (選填)</label>
+            <input type="text" id="input-pos" placeholder="n. / v. / adj." class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1">難易度級別</label>
+            <select id="input-level" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white">
+              <option value="Level 3">Level 3</option>
+              <option value="Level 4">Level 4</option>
+              <option value="Level 5">Level 5</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex gap-2 pt-2">
+          <button type="button" onclick="closeModal('add-modal')" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 rounded-xl text-xs">取消</button>
+          <button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-md">儲存單字</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal 2: QR Code 分享與開啟離線安裝 modal -->
+  <div id="qr-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl w-full max-w-sm p-5 shadow-2xl text-center space-y-4">
+      <div class="flex justify-between items-center border-b pb-2">
+        <h3 class="font-bold text-slate-800 text-base">掃描 QR Code 手機開啟</h3>
+        <button onclick="closeModal('qr-modal')" class="text-slate-400 hover:text-slate-600 p-1">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <p class="text-xs text-slate-500">使用安卓手機相機或 Chrome 掃描下方 QR Code，開啟後可點選「新增至主畫面」離線使用！</p>
+
+      <!-- QR Code 容器 -->
+      <div class="flex justify-center my-2 p-3 bg-white border border-slate-200 rounded-2xl shadow-inner inline-block">
+        <img id="qr-code-img" src="" alt="QR Code" class="w-48 h-48 mx-auto">
+      </div>
+
+      <div class="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-2.5 text-[11px] text-left leading-relaxed">
+        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i>
+        <strong>安卓安裝提示：</strong>在手機 Chrome 開啟此網址後，點選右上角選單 <i class="fa-solid fa-ellipsis-vertical"></i>，選擇「新增至主畫面」即可完成 PWA 離線安裝。
+      </div>
+
+      <button onclick="closeModal('qr-modal')" class="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl text-xs">關閉</button>
+    </div>
+  </div>
+
+  <!-- Service Worker / PWA JS 邏輯 -->
+  <script>
+    // 1. 初始化資料庫與狀態
+    let cards = JSON.parse(localStorage.getItem('flashcards_db')) || [
+      { id: '1', word: 'Algorithm', translation: '演算法', pos: 'n.', level: 'Level 3', interval: 1, nextReview: Date.now() },
+      { id: '2', word: 'Database', translation: '資料庫', pos: 'n.', level: 'Level 3', interval: 1, nextReview: Date.now() },
+      { id: '3', word: 'Sustainable', translation: '永續的；可持續的', pos: 'adj.', level: 'Level 5', interval: 1, nextReview: Date.now() }
+    ];
+
+    let currentCardIndex = -1;
+    let isFlipped = false;
+    let deferredPrompt = null;
+
+    // 2. 頁面載入初始化
+    window.addEventListener('DOMContentLoaded', () => {
+      saveToStorage();
+      setupDynamicManifest();
+      registerServiceWorker();
+      setupQRCode();
+      prepareNextCard();
+    });
+
+    // 3. Dynamic PWA Web Manifest 自動生成
+    function setupDynamicManifest() {
+      const manifest = {
+        name: "智記離線單字閃卡",
+        short_name: "智記閃卡",
+        start_url: "./",
+        display: "standalone",
+        background_color: "#ffffff",
+        theme_color: "#4f46e5",
+        icons: [
+          {
+            src: "https://cdn-icons-png.flaticon.com/512/3426/3426653.png",
+            sizes: "512x512",
+            type: "image/png"
+          }
+        ]
+      };
+      const stringManifest = JSON.stringify(manifest);
+      const blob = new Blob([stringManifest], { type: 'application/json' });
+      document.getElementById('manifest-placeholder').setAttribute('href', URL.createObjectURL(blob));
+    }
+
+    // 4. 註冊 Service Worker (支援離線 Catching)
+    function registerServiceWorker() {
+      if ('serviceWorker' in navigator) {
+        const swCode = `
+          const CACHE_NAME = 'flashcard-v1';
+          self.addEventListener('install', e => {
+            e.waitUntil(
+              caches.open(CACHE_NAME).then(cache => cache.addAll(['./']))
+            );
+          });
+          self.addEventListener('fetch', e => {
+            e.respondWith(
+              caches.match(e.request).then(res => res || fetch(e.request))
+            );
+          });
+        `;
+        const blob = new Blob([swCode], { type: 'text/javascript' });
+        navigator.serviceWorker.register(URL.createObjectURL(blob))
+          .catch(err => console.log('SW Register error:', err));
+      }
+
+      // PWA 安裝提示監聽
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        document.getElementById('pwa-install-btn').classList.remove('hidden');
+      });
+    }
+
+    function installPWA() {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then(() => {
+          deferredPrompt = null;
+          document.getElementById('pwa-install-btn').classList.add('hidden');
+        });
+      }
+    }
+
+    // 5. 生成目前網址的 QR Code
+    function setupQRCode() {
+      const currentUrl = window.location.href;
+      const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(currentUrl)}`;
+      document.getElementById('qr-code-img').src = qrApi;
+    }
+
+    // 6. 卡片抽卡與複習邏輯 (間隔複習)
+    function prepareNextCard() {
+      const now = Date.now();
+      const dueCards = cards.filter(c => c.nextReview <= now);
+      
+      document.getElementById('due-count').innerText = dueCards.length;
+      document.getElementById('total-count').innerText = cards.length;
+      
+      const progressBar = document.getElementById('progress-bar');
+      const progressPct = cards.length > 0 ? ((cards.length - dueCards.length) / cards.length) * 100 : 0;
+      progressBar.style.width = `${progressPct}%`;
+
+      const controls = document.getElementById('review-controls');
+
+      if (dueCards.length === 0) {
+        currentCardIndex = -1;
+        document.getElementById('card-word').innerText = cards.length > 0 ? "🎉 今日複習已完成！" : "目前無單字";
+        document.getElementById('card-phonetic').innerText = cards.length > 0 ? "做得好！請稍後再來複習。" : "請點擊下方按鈕新增第一個單字！";
+        document.getElementById('card-level-front').innerText = "--";
+        document.getElementById('card-translation').innerText = "--";
+        controls.classList.add('opacity-50', 'pointer-events-none');
+        return;
+      }
+
+      controls.classList.remove('opacity-50', 'pointer-events-none');
+      
+      // 隨機抽選一張到期的卡片
+      const randomCard = dueCards[Math.floor(Math.random() * dueCards.length)];
+      currentCardIndex = cards.findIndex(c => c.id === randomCard.id);
+
+      const card = cards[currentCardIndex];
+      document.getElementById('card-word').innerText = card.word;
+      document.getElementById('card-phonetic').innerText = card.pos ? `[${card.pos}]` : '';
+      document.getElementById('card-level-front').innerText = card.level || 'Level 3';
+      
+      document.getElementById('card-translation').innerText = card.translation;
+      document.getElementById('card-pos-back').innerText = card.pos || '';
+
+      // 確保卡片翻回正面
+      if (isFlipped) flipCard();
+    }
+
+    function flipCard() {
+      if (currentCardIndex === -1) return;
+      const cardElem = document.getElementById('flashcard');
+      isFlipped = !isFlipped;
+      if (isFlipped) {
+        cardElem.classList.add('rotate-y-180');
+      } else {
+        cardElem.classList.remove('rotate-y-180');
+      }
+    }
+
+    function reviewCard(remembered) {
+      if (currentCardIndex === -1) return;
+      const card = cards[currentCardIndex];
+
+      if (remembered) {
+        card.interval = (card.interval || 1) * 2;
+        card.nextReview = Date.now() + (card.interval * 60 * 1000); // 延長間隔
+      } else {
+        card.interval = 1;
+        card.nextReview = Date.now() + (30 * 1000); // 30 秒後重新複習
+      }
+
+      saveToStorage();
+      prepareNextCard();
+    }
+
+    // 7. 前端離線 OCR 文字辨識 (Tesseract.js)
+    async function handleOCRImage(input) {
+      if (!input.files || !input.files[0]) return;
+      const file = input.files[0];
+      const statusText = document.getElementById('ocr-status');
+
+      statusText.innerText = '⏳ 辨識中，請稍候...';
+      statusText.classList.add('text-indigo-600', 'font-bold');
+
+      try {
+        const worker = await Tesseract.createWorker('eng');
+        const ret = await worker.recognize(file);
+        await worker.terminate();
+
+        const scannedText = ret.data.text.trim().replace(/[\r\n]+/g, " ");
+        if (scannedText) {
+          document.getElementById('input-word').value = scannedText;
+          statusText.innerText = '✅ 辨識成功！請補充中文翻譯。';
+          statusText.className = 'text-[11px] text-emerald-600 font-bold mt-1.5';
+        } else {
+          statusText.innerText = '⚠️ 未能偵測出清晰文字，請手動輸入。';
+          statusText.className = 'text-[11px] text-rose-500 mt-1.5';
+        }
+      } catch (err) {
+        statusText.innerText = '❌ 辨識失敗：' + err.message;
+        statusText.className = 'text-[11px] text-rose-500 mt-1.5';
+      }
+    }
+
+    // 8. 表單儲存與刪除
+    function saveCardForm(e) {
+      e.preventDefault();
+      const editId = document.getElementById('edit-card-id').value;
+      const word = document.getElementById('input-word').value.trim();
+      const translation = document.getElementById('input-translation').value.trim();
+      const pos = document.getElementById('input-pos').value.trim();
+      const level = document.getElementById('input-level').value;
+
+      if (!word || !translation) return;
+
+      if (editId) {
+        const card = cards.find(c => c.id === editId);
+        if (card) {
+          card.word = word;
+          card.translation = translation;
+          card.pos = pos;
+          card.level = level;
+        }
+      } else {
+        cards.push({
+          id: Date.now().toString(),
+          word,
+          translation,
+          pos,
+          level,
+          interval: 1,
+          nextReview: Date.now()
+        });
+      }
+
+      saveToStorage();
+      closeModal('add-modal');
+      prepareNextCard();
+      renderManageList();
+    }
+
+    function deleteCard(id) {
+      if (confirm('確定要刪除這張單字卡嗎？')) {
+        cards = cards.filter(c => c.id !== id);
+        saveToStorage();
+        prepareNextCard();
+        renderManageList();
+      }
+    }
+
+    function editCard(id) {
+      const card = cards.find(c => c.id === id);
+      if (!card) return;
+
+      document.getElementById('edit-card-id').value = card.id;
+      document.getElementById('input-word').value = card.word;
+      document.getElementById('input-translation').value = card.translation;
+      document.getElementById('input-pos').value = card.pos || '';
+      document.getElementById('input-level').value = card.level || 'Level 3';
+      
+      document.getElementById('modal-title').innerText = '編輯單字卡片';
+      document.getElementById('ocr-section').classList.add('hidden');
+
+      openModal('add-modal');
+    }
+
+    // 9. UI 分頁切換與清單渲染
+    function switchTab(tabId) {
+      document.getElementById('review-tab').classList.add('hidden');
+      document.getElementById('manage-tab').classList.add('hidden');
+      document.getElementById(tabId).classList.remove('hidden');
+
+      if (tabId === 'manage-tab') {
+        renderManageList();
+      }
+    }
+
+    function renderManageList() {
+      const query = document.getElementById('search-input').value.toLowerCase();
+      const listElem = document.getElementById('word-list');
+      listElem.innerHTML = '';
+
+      const filtered = cards.filter(c => 
+        c.word.toLowerCase().includes(query) || 
+        c.translation.toLowerCase().includes(query)
+      );
+
+      if (filtered.length === 0) {
+        listElem.innerHTML = '<div class="text-center py-8 text-slate-400 text-xs">查無符合的單字</div>';
+        return;
+      }
+
+      filtered.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'bg-white border border-slate-200 rounded-2xl p-3 flex justify-between items-center shadow-sm';
+        item.innerHTML = `
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-slate-800 text-sm">${c.word}</span>
+              ${c.pos ? `<span class="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-mono">${c.pos}</span>` : ''}
+              <span class="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded">${c.level}</span>
+            </div>
+            <div class="text-xs text-slate-500 mt-0.5">${c.translation}</div>
+          </div>
+          <div class="flex items-center space-x-1">
+            <button onclick="editCard('${c.id}')" class="p-2 text-slate-400 hover:text-indigo-600"><i class="fa-solid fa-pen-to-square"></i></button>
+            <button onclick="deleteCard('${c.id}')" class="p-2 text-slate-400 hover:text-rose-500"><i class="fa-solid fa-trash"></i></button>
+          </div>
+        `;
+        listElem.appendChild(item);
+      });
+    }
+
+    function openAddModal(mode) {
+      document.getElementById('card-form').reset();
+      document.getElementById('edit-card-id').value = '';
+      document.getElementById('modal-title').innerText = '新增閃卡單字';
+      document.getElementById('ocr-status').innerText = '支援前端離線 OCR 辨識英文單字';
+      document.getElementById('ocr-status').className = 'text-[11px] text-indigo-400 mt-1.5';
+
+      const ocrSec = document.getElementById('ocr-section');
+      if (mode === 'camera') {
+        ocrSec.classList.remove('hidden');
+      } else {
+        ocrSec.classList.add('hidden');
+      }
+
+      openModal('add-modal');
+    }
+
+    function openModal(id) {
+      document.getElementById(id).classList.remove('hidden');
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).classList.add('hidden');
+    }
+
+    function saveToStorage() {
+      localStorage.setItem('flashcards_db', JSON.stringify(cards));
+    }
+  </script>
+</body>
+</html>
+```eoc
+
+### 🚀 如何線上發布與下載至安卓手機：
+
+1. **免費發布至網站**：
+   - 將上面的檔案儲存為 `index.html`。
+   - 上傳到免費託管服務（如 **GitHub Pages**、**Vercel**、**Netlify** 或 **GitHub Gist**）。
+
+2. **用手機開啟 / 掃描 QR Code**：
+   - 點擊軟體頂部的 **QR Code 按鈕**，軟體會自動生成當前網址的專屬 QR Code。
+   - 用安卓手機相機或 Chrome 瀏覽器直接掃描該 QR Code 即可開啟。
+
+3. **安裝為離線 App (PWA)**：
+   - 手機 Chrome 開啟網址後，頂部會出現 **「安裝 App」** 按鈕，或者點擊瀏覽器右上角選單 `⋮` $\rightarrow$ 選擇 **「新增至主畫面」** (Add to Home Screen)。
+   - 完成後，手機桌面就會生成一個圖示，點開後**完全沒有網址列**，即使斷網也能順利開啟、拍照辨識單字與複習！
